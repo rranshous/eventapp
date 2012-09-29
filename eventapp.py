@@ -1,11 +1,13 @@
 
 from inspect import getargspec
 from itertools import chain
-from threading import Thread, Event, Lock
 from time import sleep
 from redis_natives import datatypes as rn
 from contextlib import contextmanager
 import sys
+
+from threading import Thread
+from multiprocessing import Process, Event, Lock
 
 # ty rranshous/dss/accessor.py
 def get_function_args(func):
@@ -29,6 +31,7 @@ from revent import ReventClient, ReventMessage
 import revent.introspect_data as rc_introspect
 
 threads_per_stage = 5
+processes_per_stage = 5
 
 class EventApp(object):
     def __init__(self, app_name, *stage_definitions):
@@ -39,12 +42,14 @@ class EventApp(object):
         self.stages = []
         self.create_stages()
 
-    def run(self, threaded=True):
+    def run(self, threaded=True, multiprocess=False):
         """
         starts up a child thread for each stage
         """
 
-        if threaded:
+        if multiprocess:
+            self._run_multiprocess(threaded)
+        elif threaded:
             self._run_threaded()
         else:
             self._run()
@@ -67,10 +72,70 @@ class EventApp(object):
 
         print 'stopping'
 
-    def _run_threaded(self):
+    def _run_multiprocess(self, threaded=False, stop_event=None):
+        """
+        run the handlers in their own processes
+        """
+
+        global processes_per_stage
+
+        def process_run(app_handler, stop_event):
+            while not stop_event.is_set():
+                try:
+                    app_handler.cycle(block=True, timeout=4)
+                except Exception, ex:
+                    print 'EXCEPTION: %s' % str(ex)
+                    stop_event.set()
+                    raise
+            print 'DONE process'
+
+        # set up a event so we can stop all the handlers gracefully
+        if not stop_event:
+            stop_event = Event()
+
+        # create a process for each handler
+        processes = []
+        print 'creating processes'
+        for i, stage in enumerate(self.stages):
+            for j in xrange(processes_per_stage):
+                if not threaded:
+                    process = Process(target=process_run, args=(stage, stop_event))
+                else:
+                    process = Process(target=self._threaded_run,
+                                      args=(stop_event))
+                processes.append(process)
+
+
+        # start our processes
+        print 'starting processes'
+        for process in processes:
+            process.start()
+
+        # now chill about waiting for an interupt
+        try:
+            while True and not stop_event.is_set():
+                sleep(1)
+        except Exception, ex:
+            print 'EXCEPTION: %s' % (ex)
+        except KeyboardInterrupt, ex:
+            print 'caught keyboard interrupt'
+
+        print 'stopping processes'
+
+        # stop all the processes
+        stop_event.set()
+        for process in processes:
+            process.join()
+
+        raise ex
+
+
+    def _run_threaded(self, stop_event=None):
         """
         runs handlers in their own threads
         """
+
+        global threads_per_stage
 
         def thread_run(app_handler, stop_event):
             while not stop_event.is_set():
@@ -83,7 +148,8 @@ class EventApp(object):
             print 'DONE THREAD'
 
         # set up a event so we can stop all the handlers gracefully
-        stop_event = Event()
+        if not stop_event:
+            stop_event = Event()
 
         # create a thread for each handler
         threads = []
