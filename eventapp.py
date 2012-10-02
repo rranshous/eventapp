@@ -82,7 +82,7 @@ class EventApp(object):
         def process_run(app_handler, stop_event):
             while not stop_event.is_set():
                 try:
-                    app_handler.cycle(block=True, timeout=4)
+                    app_handler.cycle(block=True, timeout=10)
                 except Exception, ex:
                     print 'EXCEPTION: %s' % str(ex)
                     stop_event.set()
@@ -140,7 +140,7 @@ class EventApp(object):
         def thread_run(app_handler, stop_event):
             while not stop_event.is_set():
                 try:
-                    app_handler.cycle(block=True, timeout=4)
+                    app_handler.cycle(block=True, timeout=10)
                 except Exception, ex:
                     print 'EXCEPTION: %s' % str(ex)
                     stop_event.set()
