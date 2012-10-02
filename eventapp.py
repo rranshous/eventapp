@@ -30,11 +30,13 @@ threads_per_stage = 5
 processes_per_stage = 5
 
 class EventApp(object):
-    def __init__(self, app_name, config, *stage_definitions):
+    def __init__(self, app_name, config,
+                 base_context_mapping, *stage_definitions):
 
         self.app_name = app_name
         self.config = config
         self.stage_definitions = stage_definitions
+        self.base_context_mapping = base_context_mapping
 
         self.stages = []
         self.create_stages()
@@ -98,8 +100,8 @@ class EventApp(object):
                 if not threaded:
                     process = Process(target=process_run, args=(stage, stop_event))
                 else:
-                    process = Process(target=self._threaded_run,
-                                      args=(stop_event))
+                    process = Process(target=self._run_threaded,
+                                      args=(stop_event,))
                 processes.append(process)
 
 
@@ -271,19 +273,24 @@ class EventApp(object):
         assert in_event, "No in event found: " + str(stage_def)
 
         # finally, create our handler
-        return AppHandler(self.app_name, self.config, in_event, handler, out_event)
+        return AppHandler(self.app_name, self.config,
+                          self.base_context_mapping, in_event,
+                          handler, out_event)
 
 
 class AppHandler(object):
 
-    def __init__(self, app_name, config, in_event, handler, out_event=None):
+    def __init__(self, app_name, config, base_context_mapping,
+                 in_event, handler, out_event=None):
 
         self.config = config
         self.app_name = app_name
         self.in_event = in_event
         self.handler = handler
         self.out_event = out_event
-        self.context = bubbles.Context()
+        self.context = bubbles.Context(base_context_mapping)
+
+        print 'context mapping: %s' % self.context.mapping
 
         # sanity checks
         assert in_event, "Must provide in_event"
