@@ -3,7 +3,7 @@ from inspect import getargspec
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
-from redis import StrictRedis
+from redis import Redis
 from contextlib import contextmanager
 import sys
 
@@ -300,7 +300,7 @@ class AppHandler(object):
                                **self.config.get('revent', {}))
 
         # create a connection to redis
-        self.redis = StrictRedis(**self.config.get('redis', {}))
+        self.redis = Redis(**self.config.get('redis', {}))
 
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
