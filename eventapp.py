@@ -1,5 +1,6 @@
 
-from inspect import getargspec, isbuiltin, getmembers
+from decorator import decorator
+from inspect import getargspec, isbuiltin, getmembers, ismethod
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
@@ -7,17 +8,11 @@ from redis import Redis
 from contextlib import contextmanager
 import sys
 
+import bubbles
+
 from threading import Thread
 from multiprocessing import Process, Event, Lock
 
-# ty rranshous/dss/accessor.py
-def get_function_args(func):
-    """ returns list of functions args + list of named args """
-    arg_spec = getargspec(func)
-    return (
-        map(unicode,filter(lambda v: v!='self', arg_spec.args or [])),
-        map(unicode,filter(lambda v: v!='self', arg_spec.keywords or []))
-    )
 
 # first handler's args based on incoming events kwarg based args
 # any of the initial event's data not handled by initial handler
@@ -287,7 +282,6 @@ class AppHandler(object):
         self.app_name = app_name
         self.in_event = in_event
         self.handler = handler
-        self.handler_args = get_function_args(self.handler)
         self.out_event = out_event
         self.context = bubbles.Context()
 
@@ -306,66 +300,71 @@ class AppHandler(object):
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
 
-        # update the context to include all the double underscore methods
-        skip = ['__repr__', '__init__']
-        for name, method in getmembers(self, predicate=isbuiltin):
-            if name.startswith('__') and name not in skip:
-                context.add(name, method)
+        # update the context to include all the underscore methods
+        # (but not dunderscore)
+        for name, value in getmembers(self):
+            if self._include_in_context(name, value):
+                self.context.add(name, value)
 
         # update the context to include the revent client and
         # introspect module
         self.context.add('revent_client', self.rc)
         self.context.add('introspect', rc_introspect)
 
+    @staticmethod
+    def _include_in_context(name, value):
+        include = name.startswith('_') and not name.startswith('__')
+        return include
+
     # helper methods for accessing natives
-    def __dict(self, name, default=None):
+    def _dict(self, name, default=None):
         name = str(name) # redis demands ascii
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Dict(*args)
 
-    def __sequence(self, name, default=None):
+    def _sequence(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Sequence(*args)
 
-    def __zset(self, name, default=None):
+    def _zset(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.ZSet(*args)
 
-    def __list(self, name, default=None):
+    def _list(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.List(*args)
 
-    def __set(self, name, default=None):
+    def _set(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Set(*args)
 
-    def __string(self, name, default=None):
+    def _string(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Primitive(*args)
 
-    def __signal(self, name):
+    def _signal(self, name):
         name = str(name)
         return Signal(self.redis,
                       '%s:%s:signal' % (self.redis_ns, name))
 
-    def __stop(self):
+    def _stop(self):
         print 'Stopping handler'
         raise StopIteration
 
@@ -414,13 +413,13 @@ class AppHandler(object):
         includes the current event's data
         """
         context = self.context.copy()
-        context.update(dict(
+        context.update(
             event_data=event.data,
             event_name=event.event,
             event_id=event.id,
             event=event
-        ))
-        context.update(event.data)
+        )
+        context.update(**event.data)
         return context.create_partial(self.handler)
 
     def _build_result_event(self, event, result):
