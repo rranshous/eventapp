@@ -3,6 +3,7 @@ from inspect import getargspec
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
+from redis import StrictRedis
 from contextlib import contextmanager
 import sys
 
@@ -34,9 +35,10 @@ threads_per_stage = 5
 processes_per_stage = 5
 
 class EventApp(object):
-    def __init__(self, app_name, *stage_definitions):
+    def __init__(self, app_name, config, *stage_definitions):
 
         self.app_name = app_name
+        self.config = config
         self.stage_definitions = stage_definitions
 
         self.stages = []
@@ -274,13 +276,14 @@ class EventApp(object):
         assert in_event, "No in event found: " + str(stage_def)
 
         # finally, create our handler
-        return AppHandler(self.app_name, in_event, handler, out_event)
+        return AppHandler(self.app_name, self.config, in_event, handler, out_event)
 
 
 class AppHandler(object):
 
-    def __init__(self, app_name, in_event, handler, out_event=None):
+    def __init__(self, app_name, config, in_event, handler, out_event=None):
 
+        self.config = config
         self.app_name = app_name
         self.in_event = in_event
         self.handler = handler
@@ -293,7 +296,11 @@ class AppHandler(object):
 
         # subscribe to our in_event
         self.channel = '%s-%s-%s' % (app_name, in_event, self.handler.__name__)
-        self.rc = ReventClient(self.channel, in_event, verified=10)
+        self.rc = ReventClient(self.channel, in_event, verified=10,
+                               **self.config.get('revent', {}))
+
+        # create a connection to redis
+        self.redis = StrictRedis(**self.config.get('redis', {}))
 
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
@@ -302,49 +309,49 @@ class AppHandler(object):
     # helper methods for accessing natives
     def _dict(self, name, default=None):
         name = str(name) # redis demands ascii
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Dict(*args)
 
     def _sequence(self, name, default=None):
         name = str(name)
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Sequence(*args)
 
     def _zset(self, name, default=None):
         name = str(name)
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.ZSet(*args)
 
     def _list(self, name, default=None):
         name = str(name)
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.List(*args)
 
     def _set(self, name, default=None):
         name = str(name)
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Set(*args)
 
     def _string(self, name, default=None):
         name = str(name)
-        args = [self.rc.conn, '%s:%s' % (self.redis_ns, name)]
+        args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Primitive(*args)
 
     def _signal(self, name):
         name = str(name)
-        return Signal(self.rc.conn,
+        return Signal(self.redis,
                       '%s:%s:signal' % (self.redis_ns, name))
 
     def _stop(self):
