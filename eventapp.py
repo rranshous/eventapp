@@ -1,5 +1,5 @@
 
-from inspect import getargspec
+from inspect import getargspec, isbuiltin, getmembers
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
@@ -289,6 +289,7 @@ class AppHandler(object):
         self.handler = handler
         self.handler_args = get_function_args(self.handler)
         self.out_event = out_event
+        self.context = bubbles.Context()
 
         # sanity checks
         assert in_event, "Must provide in_event"
@@ -305,65 +306,68 @@ class AppHandler(object):
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
 
+        # update the context to include all the double underscore methods
+        skip = ['__repr__', '__init__']
+        for name, method in getmembers(self, predicate=isbuiltin):
+            if name.startswith('__') and name not in skip:
+                context.add(name, method)
+
+        # update the context to include the revent client and
+        # introspect module
+        self.context.add('revent_client', self.rc)
+        self.context.add('introspect', rc_introspect)
 
     # helper methods for accessing natives
-    def _dict(self, name, default=None):
+    def __dict(self, name, default=None):
         name = str(name) # redis demands ascii
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Dict(*args)
 
-    def _sequence(self, name, default=None):
+    def __sequence(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Sequence(*args)
 
-    def _zset(self, name, default=None):
+    def __zset(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.ZSet(*args)
 
-    def _list(self, name, default=None):
+    def __list(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.List(*args)
 
-    def _set(self, name, default=None):
+    def __set(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Set(*args)
 
-    def _string(self, name, default=None):
+    def __string(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Primitive(*args)
 
-    def _signal(self, name):
+    def __signal(self, name):
         name = str(name)
         return Signal(self.redis,
                       '%s:%s:signal' % (self.redis_ns, name))
 
-    def _stop(self):
+    def __stop(self):
         print 'Stopping handler'
         raise StopIteration
-
-    def _do_work(self, *objs):
-        do_work, confirm = check_do_work(self._signal, *objs)
-        return do_work, confirm
-
-    def _event(self, event, data):
-        return ReventMessage(event, data)
 
     def __repr__(self):
         return '<AppHandler %s=>%s=>%s>' % (self.in_event,
@@ -377,13 +381,13 @@ class AppHandler(object):
 
         if event:
 
-            # build the handlers input from the event data
-            handler_args, handler_kwargs = self._build_handler_args(event)
+            # wrap the handler in the current context
+            wrapped_handler = self._wrap_handler(event)
 
             # call our handler
             try:
                 print '[H] %s [E] %s' % (self.handler.__name__, event)
-                for result in self.handler(*handler_args, **handler_kwargs):
+                for result in wrapped_handler():
 
                     # see if this results calls for another event to be fired
                     result_event = self._build_result_event(event, result)
@@ -404,51 +408,20 @@ class AppHandler(object):
             # let them know we're done handling the event
             self.rc.confirm(event)
 
-    def _build_handler_args(self, event):
-
-        # fill in the args / kwargs from event data
-        handler_args = []
-        handler_kwargs = {}
-
-        # supports special args such as event, event_name, event_data
-
-        # TODO: replace with bubbles
-
-        for arg in self.handler_args[0]:
-            v = getattr(self, arg, None)
-            if v:
-                handler_args.append(v)
-            elif arg == 'event_data':
-                handler_args.append(event.data)
-            elif arg == 'event_name':
-                handler_args.append(event.event)
-            elif arg == 'event':
-                handler_args.append(event)
-            elif arg == 'revent_client':
-                handler_args.append(self.rc)
-            elif arg == 'introspect':
-                handler_args.append(rc_introspect)
-            else:
-                handler_args.append(event.data.get(arg))
-
-        for kwarg in self.handler_args[1]:
-            v = getattr(self, kwarg, None)
-            if v:
-                handler_kwargs[kwarg] = v
-            elif kwarg == 'event_data':
-                handler_kwargs[kwarg] = event.data
-            elif kwarg == 'event_name':
-                handler_kwargs[kwarg] = event.event
-            elif kwarg == 'event':
-                handler_kwargs[kwarg] = event
-            elif kwarg == 'revent_client':
-                handler_kwargs[kwarg] = self.rc
-            elif kwargs == 'introspect':
-                handler_kwargs[kwarg] = rc_introspect
-            else:
-                handler_kwargs[kwarg] = event.data.get(kwarg)
-
-        return handler_args, handler_kwargs
+    def _wrap_handler(self, event):
+        """
+        returns the handler wrapped in a context which
+        includes the current event's data
+        """
+        context = self.context.copy()
+        context.update(dict(
+            event_data=event.data,
+            event_name=event.event,
+            event_id=event.id,
+            event=event
+        ))
+        context.update(event.data)
+        return context.create_partial(self.handler)
 
     def _build_result_event(self, event, result):
 

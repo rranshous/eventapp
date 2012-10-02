@@ -1,0 +1,3 @@
+[submodule "bubbles"]
+	path = bubbles
+	url = git@github.com:rranshous/bubbles.git
