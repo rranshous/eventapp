@@ -1,3 +1,6 @@
 [submodule "bubbles"]
 	path = bubbles
 	url = git@github.com:rranshous/bubbles.git
+[submodule "revent"]
+	path = revent
+	url = git@github.com:altalang/Revent.git
