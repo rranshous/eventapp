@@ -4,7 +4,6 @@ from inspect import getargspec, isbuiltin, getmembers, ismethod
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
-from redis import Redis
 from contextlib import contextmanager
 import sys
 
@@ -23,11 +22,10 @@ from multiprocessing import Process, Event, Lock
 #   to want newest args (end of stack)
 # handlers which return Bools are treated as filterse
 
-from revent import ReventClient, ReventMessage
 import revent.introspect_data as rc_introspect
 
 threads_per_stage = 5
-processes_per_stage = 5
+forks = 5
 
 class EventApp(object):
     def __init__(self, app_name, config,
@@ -76,7 +74,7 @@ class EventApp(object):
         run the handlers in their own processes
         """
 
-        global processes_per_stage
+        global forks
 
         def process_run(app_handler, stop_event):
             while not stop_event.is_set():
@@ -95,8 +93,8 @@ class EventApp(object):
         # create a process for each handler
         processes = []
         print 'creating processes'
-        for i, stage in enumerate(self.stages):
-            for j in xrange(processes_per_stage):
+        for j in xrange(forks):
+            for i, stage in enumerate(self.stages):
                 if not threaded:
                     process = Process(target=process_run, args=(stage, stop_event))
                 else:
@@ -283,12 +281,17 @@ class AppHandler(object):
     def __init__(self, app_name, config, base_context_mapping,
                  in_event, handler, out_event=None):
 
+        # import here so that we import post-fork
+        from revent import ReventClient, ReventMessage
+        from redis import Redis
+
         self.config = config
         self.app_name = app_name
         self.in_event = in_event
         self.handler = handler
         self.out_event = out_event
         self.context = bubbles.Context(base_context_mapping)
+        self.ReventMessage = ReventMessage
 
         print 'context mapping: %s' % self.context.mapping
 
@@ -437,7 +440,7 @@ class AppHandler(object):
             return None
 
         # if the result if an event, just fire it's info
-        if isinstance(result, ReventMessage):
+        if isinstance(result, self.ReventMessage):
             return result.event, result.data
 
         # if the reuslt is a true or false than it's a filter
