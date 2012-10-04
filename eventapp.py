@@ -302,10 +302,10 @@ class AppHandler(object):
         # subscribe to our in_event
         self.channel = '%s-%s-%s' % (app_name, in_event, self.handler.__name__)
         self.rc = ReventClient(self.channel, in_event, verified=10,
-                               **self.config.get('revent', {}))
+                               **self.config.get('revent'))
 
         # create a connection to redis
-        self.redis = Redis(**self.config.get('redis', {}))
+        self.redis = Redis(**self.config.get('redis'))
 
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
