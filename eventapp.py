@@ -290,7 +290,7 @@ class AppHandler(object):
         self.in_event = in_event
         self.handler = handler
         self.out_event = out_event
-        self.context = bubbles.Context(base_context_mapping)
+        self.context = bubbles.build_context(base_context_mapping)
         self.ReventMessage = ReventMessage
 
         print 'context mapping: %s' % self.context.mapping
@@ -313,7 +313,7 @@ class AppHandler(object):
         # update the context to include all the underscore methods
         # (but not dunderscore)
         for name, value in getmembers(self):
-            if self._include_in_context(name, value):
+            if self.__include_in_context(name, value):
                 self.context.add(name, value)
 
         # update the context to include the revent client and
@@ -321,8 +321,11 @@ class AppHandler(object):
         self.context.add('revent_client', self.rc)
         self.context.add('introspect', rc_introspect)
 
+        # add config to context
+        self.context.add('config', self.config)
+
     @staticmethod
-    def _include_in_context(name, value):
+    def __include_in_context(name, value):
         include = name.startswith('_') and not name.startswith('__')
         return include
 
@@ -396,6 +399,7 @@ class AppHandler(object):
             # call our handler
             try:
                 print '[H] %s [E] %s' % (self.handler.__name__, event)
+
                 for result in wrapped_handler():
 
                     # see if this results calls for another event to be fired
