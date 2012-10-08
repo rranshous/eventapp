@@ -1,16 +1,13 @@
-
-from decorator import decorator
-from inspect import getargspec, isbuiltin, getmembers, ismethod
+from inspect import getmembers
 from itertools import chain
 from time import sleep
 from redis_natives import datatypes as rn
-from contextlib import contextmanager
 import sys
 
 import bubbles
 
 from threading import Thread
-from multiprocessing import Process, Event, Lock
+from multiprocessing import Process, Event
 
 
 # first handler's args based on incoming events kwarg based args
@@ -314,11 +311,6 @@ class AppHandler(object):
         self.redis = Redis(**self.config.get('redis'))
         # add to context
         self.context.add('redis', self.redis)
-
-        # create a connection to mongo
-        self.mongo = pymongo.Connection(**self.config.get('mongodb'))
-        # add it to the context
-        self.context.add('mongo', self.mongo)
 
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
