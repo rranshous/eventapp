@@ -29,7 +29,8 @@ forks = 5
 
 class EventApp(object):
     def __init__(self, app_name, config,
-                 base_context_mapping, *stage_definitions):
+                       base_context_mapping,
+                       *stage_definitions):
 
         self.app_name = app_name
         self.config = config
@@ -304,8 +305,20 @@ class AppHandler(object):
         self.rc = ReventClient(self.channel, in_event, verified=10,
                                **self.config.get('revent'))
 
+        # update the context to include the revent client and
+        # introspect module
+        self.context.add('revent', self.rc)
+        self.context.add('introspect', rc_introspect)
+
         # create a connection to redis
         self.redis = Redis(**self.config.get('redis'))
+        # add to context
+        self.context.add('redis', self.redis)
+
+        # create a connection to mongo
+        self.mongo = pymongo.Connection(**self.config.get('mongodb'))
+        # add it to the context
+        self.context.add('mongo', self.mongo)
 
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
@@ -316,10 +329,6 @@ class AppHandler(object):
             if self.__include_in_context(name, value):
                 self.context.add(name, value)
 
-        # update the context to include the revent client and
-        # introspect module
-        self.context.add('revent_client', self.rc)
-        self.context.add('introspect', rc_introspect)
 
         # add config to context
         self.context.add('config', self.config)
