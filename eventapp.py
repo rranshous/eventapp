@@ -9,6 +9,8 @@ import bubbles
 from threading import Thread
 from multiprocessing import Process, Event
 
+from revent import ReventClient, ReventMessage
+from redis import Redis
 
 # first handler's args based on incoming events kwarg based args
 # any of the initial event's data not handled by initial handler
@@ -20,9 +22,6 @@ from multiprocessing import Process, Event
 # handlers which return Bools are treated as filterse
 
 import revent.introspect_data as rc_introspect
-
-threads_per_stage = 5
-forks = 5
 
 class EventApp(object):
     def __init__(self, app_name, config,
@@ -37,25 +36,29 @@ class EventApp(object):
         self.stages = []
         self.create_stages()
 
-    def run(self, threaded=True, multiprocess=False):
+    def run(self, threaded=True, multiprocess=False,
+            threads=2, forks=2):
         """
         starts up a child thread for each stage
         """
 
         if multiprocess:
-            self._run_multiprocess(threaded)
+            self._run_multiprocess(forks, threads, threaded)
         elif threaded:
-            self._run_threaded()
+            self._run_threaded(threads)
         else:
             self._run()
 
-    def _run(self):
+    def _run(self, stop_event=None):
         """
         runs all handlers in single thread
         """
 
+        if not stop_event:
+            stop_event = Event()
+
         try:
-            while True:
+            while not stop_event.is_set():
                 for stage in self.stages:
                     stage.cycle(block=True, timeout=1)
         except KeyboardInterrupt, ex:
@@ -67,12 +70,11 @@ class EventApp(object):
 
         print 'stopping'
 
-    def _run_multiprocess(self, threaded=False, stop_event=None):
+    def _run_multiprocess(self, forks=1, threads=1,
+                          threaded=False, stop_event=None):
         """
         run the handlers in their own processes
         """
-
-        global forks
 
         def process_run(app_handler, stop_event):
             while not stop_event.is_set():
@@ -88,17 +90,22 @@ class EventApp(object):
         if not stop_event:
             stop_event = Event()
 
-        # create a process for each handler
+        # we should end up w/ one worker process for each
+        # fork count
         processes = []
-        print 'creating processes'
+        print 'creating processes [%s] (%s)' % (
+               forks, threaded)
+
         for j in xrange(forks):
-            for i, stage in enumerate(self.stages):
-                if not threaded:
-                    process = Process(target=process_run, args=(stage, stop_event))
-                else:
-                    process = Process(target=self._run_threaded,
-                                      args=(stop_event,))
-                processes.append(process)
+
+            if not threaded:
+                p = Process(target=self._run, args=(stop_event,))
+
+            else:
+                p = Process(target=self._run_threaded,
+                            args=(threads, stop_event))
+
+            processes.append(p)
 
 
         # start our processes
@@ -125,12 +132,12 @@ class EventApp(object):
         raise ex
 
 
-    def _run_threaded(self, stop_event=None):
+    def _run_threaded(self, threads=1, stop_event=None):
         """
         runs handlers in their own threads
         """
 
-        global threads_per_stage
+        threads_per_stage = threads
 
         def thread_run(app_handler, stop_event):
             while not stop_event.is_set():
@@ -148,7 +155,7 @@ class EventApp(object):
 
         # create a thread for each handler
         threads = []
-        print 'creating threads'
+        print 'creating threads [%s]' % threads_per_stage
         for i, stage in enumerate(self.stages):
             for j in xrange(threads_per_stage):
                 thread = Thread(target=thread_run, args=(stage, stop_event))
@@ -279,9 +286,6 @@ class AppHandler(object):
     def __init__(self, app_name, config, base_context_mapping,
                  in_event, handler, out_event=None):
 
-        # import here so that we import post-fork
-        from revent import ReventClient, ReventMessage
-        from redis import Redis
 
         self.config = config
         self.app_name = app_name
