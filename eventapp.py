@@ -12,26 +12,17 @@ from multiprocessing import Process, Event
 from revent import ReventClient, ReventMessage
 from redis import Redis
 
-# first handler's args based on incoming events kwarg based args
-# any of the initial event's data not handled by initial handler
-#   are excluded from further contexts
-# lastt handlers yield values should be dicts to map to outgoing event
-# all internal state's are done by position sig kwargs
-# if handler takes less args than current stack handler is assumed
-#   to want newest args (end of stack)
-# handlers which return Bools are treated as filterse
-
 import revent.introspect_data as rc_introspect
 
 class EventApp(object):
     def __init__(self, app_name, config,
-                       base_context_mapping,
+                       base_context,
                        *stage_definitions):
 
         self.app_name = app_name
         self.config = config
         self.stage_definitions = stage_definitions
-        self.base_context_mapping = base_context_mapping
+        self.base_context = base_context
 
         self.stages = []
         self.create_stages()
@@ -86,7 +77,8 @@ class EventApp(object):
                     raise
             print 'DONE process'
 
-        # set up a event so we can stop all the handlers gracefully
+        # set up a event so we can stop all the handlers
+        # gracefully
         if not stop_event:
             stop_event = Event()
 
@@ -149,7 +141,8 @@ class EventApp(object):
                     raise
             print 'DONE THREAD'
 
-        # set up a event so we can stop all the handlers gracefully
+        # set up a event so we can stop all the handlers
+        # gracefully
         if not stop_event:
             stop_event = Event()
 
@@ -158,7 +151,8 @@ class EventApp(object):
         print 'creating threads [%s]' % threads_per_stage
         for i, stage in enumerate(self.stages):
             for j in xrange(threads_per_stage):
-                thread = Thread(target=thread_run, args=(stage, stop_event))
+                thread = Thread(target=thread_run,
+                                args=(stage, stop_event))
                 threads.append(thread)
 
         # start our threads
@@ -191,15 +185,16 @@ class EventApp(object):
         print 'creating stages: %s' % str(self.stage_definitions)
 
         # go through the stage defs, creating a stage for each
-        # create inline list of stages missing their in event or out event
+        # create inline list of stages missing their in event
+        # or out event
         c = 0
         def incomplete():
-            incomplete_stages = [s for s in self.stages if not s.in_event or not s.out_event]
-            #if incomplete_stages:
-                #print 'INCOMPLETE STAGES: %s' % (str(incomplete_stages))
-            #if len(self.stages) != len(self.stage_definitions):
-                #print 'INCOMPLETE STAGES LEN'
-            return incomplete_stages or len(self.stages) != len(self.stage_definitions)
+            incomplete_stages = [s for s in self.stages
+                                    if not s.in_event or not
+                                        s.out_event]
+            bad = len(self.stages) != len(self.stage_definitions)
+            bad = bad or incomplete_stages
+            return bad
 
         while incomplete():
             print 'PASS %s' % c; c+=1
@@ -235,20 +230,21 @@ class EventApp(object):
 
         handler = in_event = out_event = None
 
-        print '---creating stage: \n---%s\n---%s\n---%s---' % (previous_stage, stage_def, next_stage)
-
-        # TODO: update to support multiple handlers per stage def which
-        #       would result in multiple stages being created
+        # TODO: update to support multiple handlers per stage
+        #       def which would result in multiple stages being
+        #       created
         # TODO: update to support multiple in events
 
-        # if the stage def isn't complete (doesn't have three args)
-        # than we are going to add in the out / in events from the handlers
-        # on either side
+        # if the stage def isn't complete (doesn't have three
+        # args) than we are going to add in the out / in events
+        # from the handlers on either side
         full_def = stage_def
         if not len(stage_def) >= 3:
-            full_def = chain([previous_stage.out_event] if previous_stage else [],
+            full_def = chain([previous_stage.out_event]
+                                if previous_stage else [],
                              stage_def,
-                             [next_stage.in_event] if next_stage else [])
+                             [next_stage.in_event]
+                                if next_stage else [])
 
 
         for arg in full_def:
@@ -272,18 +268,19 @@ class EventApp(object):
             out_event = next_stage.in_event
 
         # make sure we've got everything
-        assert handler, "No handler found for stage: " + str(stage_def)
+        assert handler, "No handler found for stage: " \
+                        + str(stage_def)
         assert in_event, "No in event found: " + str(stage_def)
 
         # finally, create our handler
         return AppHandler(self.app_name, self.config,
-                          self.base_context_mapping, in_event,
+                          self.base_context, in_event,
                           handler, out_event)
 
 
 class AppHandler(object):
 
-    def __init__(self, app_name, config, base_context_mapping,
+    def __init__(self, app_name, config, base_context,
                  in_event, handler, out_event=None):
 
 
@@ -292,7 +289,10 @@ class AppHandler(object):
         self.in_event = in_event
         self.handler = handler
         self.out_event = out_event
-        self.context = bubbles.build_context(base_context_mapping)
+        # slice out a copy of the base context,
+        # this way things we add are not shared w/ other
+        # app handlers
+        self.context = base_context.copy()
         self.ReventMessage = ReventMessage
 
         print 'context mapping: %s' % self.context.mapping
@@ -302,8 +302,10 @@ class AppHandler(object):
         assert handler, "Must provide handler"
 
         # subscribe to our in_event
-        self.channel = '%s-%s-%s' % (app_name, in_event, self.handler.__name__)
-        self.rc = ReventClient(self.channel, in_event, verified=10,
+        self.channel = '%s-%s-%s' % (app_name, in_event,
+                                     self.handler.__name__)
+        self.rc = ReventClient(self.channel, in_event,
+                               verified=60,
                                **self.config.get('revent'))
 
         # update the context to include the revent client and
@@ -319,20 +321,21 @@ class AppHandler(object):
         # make our redis namespace the same as our channel
         self.redis_ns = 'App-%s' % self.app_name
 
-        # update the context to include all the underscore methods
-        # (but not dunderscore)
+        # update the context to include all the underscore
+        # methods (but not dunderscore)
         for name, value in getmembers(self):
             if self.__include_in_context(name, value):
                 self.context.add(name, value)
 
-
         # add config to context
         self.context.add('config', self.config)
+
 
     @staticmethod
     def __include_in_context(name, value):
         include = name.startswith('_') and not name.startswith('__')
         return include
+
 
     # helper methods for accessing natives
     def _dict(self, name, default=None):
@@ -342,12 +345,14 @@ class AppHandler(object):
             args.append(default)
         return rn.Dict(*args)
 
+
     def _sequence(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.Sequence(*args)
+
 
     def _zset(self, name, default=None):
         name = str(name)
@@ -356,12 +361,14 @@ class AppHandler(object):
             args.append(default)
         return rn.ZSet(*args)
 
+
     def _list(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
         if default is not None:
             args.append(default)
         return rn.List(*args)
+
 
     def _set(self, name, default=None):
         name = str(name)
@@ -370,6 +377,7 @@ class AppHandler(object):
             args.append(default)
         return rn.Set(*args)
 
+
     def _string(self, name, default=None):
         name = str(name)
         args = [self.redis, '%s:%s' % (self.redis_ns, name)]
@@ -377,19 +385,23 @@ class AppHandler(object):
             args.append(default)
         return rn.Primitive(*args)
 
+
     def _signal(self, name):
         name = str(name)
         return Signal(self.redis,
                       '%s:%s:signal' % (self.redis_ns, name))
 
+
     def _stop(self):
         print 'Stopping handler'
         raise StopIteration
 
+
     def __repr__(self):
-        return '<AppHandler %s=>%s=>%s>' % (self.in_event,
-                                            self.handler.__name__,
-                                            self.out_event or '')
+        return '<AppHandler %s=>%s=>%s>' % (
+                    self.in_event, self.handler.__name__,
+                    self.out_event or '')
+
 
     def cycle(self, block=False, timeout=1):
 
@@ -403,21 +415,26 @@ class AppHandler(object):
 
             # call our handler
             try:
-                print '[H] %s [E] %s' % (self.handler.__name__, event)
+                print '[H] %s [E] %s' % (
+                        self.handler.__name__, event)
 
                 for result in wrapped_handler():
 
-                    # see if this results calls for another event to be fired
+                    # see if this results calls for another
+                    # event to be fired
                     result_event = self._build_result_event(event, result)
 
-                    print '[%s] [%s] %s => %s' % (event, self, str(result), str(result_event))
+                    print '[%s] [%s] %s => %s' % (
+                            event, self, str(result),
+                            str(result_event))
 
                     # result event is event, event_data
                     if result_event:
                         self.rc.fire(*result_event)
 
             except Exception:
-                print 'Handler Exception: %s %s' % (self.handler.__name__, event)
+                print 'Handler Exception: %s %s' % (
+                        self.handler.__name__, event)
                 raise
 
             # flush the prints
@@ -426,11 +443,14 @@ class AppHandler(object):
             # let them know we're done handling the event
             self.rc.confirm(event)
 
+
     def _wrap_handler(self, event):
         """
         returns the handler wrapped in a context which
         includes the current event's data
         """
+        # we copy so that we can shed w/e was set
+        # during previous handles
         context = self.context.copy()
         context.update(
             event_data=event.data,
@@ -440,6 +460,7 @@ class AppHandler(object):
         )
         context.update(**event.data)
         return context.create_partial(self.handler)
+
 
     def _build_result_event(self, event, result):
 
@@ -453,9 +474,9 @@ class AppHandler(object):
             return result.event, result.data
 
         # if the reuslt is a true or false than it's a filter
-        # a false means don't re-fire the event, True means re-fire
-        # if we have an out event set than we'll fire the input event's
-        # data w/ our out event name
+        # a false means don't re-fire the event, True means
+        # re-fire if we have an out event set than we'll fire
+        # the input event's data w/ our out event name
         if result is True:
             return self.out_event, event.data
 
@@ -463,8 +484,8 @@ class AppHandler(object):
         if result is False:
             return None
 
-        # if the reuslt is a dictionary than we're going to use that
-        # dict as the resulting event's data
+        # if the reuslt is a dictionary than we're going to
+        # use that dict as the resulting event's data
         if isinstance(result, dict):
             return self.out_event, result
 
@@ -473,8 +494,8 @@ class AppHandler(object):
         if isinstance(result, tuple) and len(result) == 2 \
            and isinstance(result[0], (str, unicode)):
 
-            # if the second value is a dict, than it's a new event
-            # and the first value is the new event's event
+            # if the second value is a dict, than it's a new
+            # event and the first value is the new event's event
             if isinstance(result[1], dict):
                 return tuple(result)
 
@@ -482,22 +503,23 @@ class AppHandler(object):
                 # a k/v pair to set in the previous
                 # events data (k,v)
 
-                # update the data in place, no one else should touch!
+                # update the data in place
+                # no one else should touch!
                 event.data[result[0]] = result[1]
                 return self.out_event, event.data
 
         elif isinstance(result, tuple):
 
-            # if it's a tuple which is longer than 2 than it should be
-            # full of sub tuples, each sub tuble contains a key/value
-            # to be set
+            # if it's a tuple which is longer than 2 than it
+            # should be full of sub tuples, each sub tuble
+            # contains a key/value to be set
             for k, v in result:
                 event.data[k] = v
             return self.out_event, event.data
 
-        # if it's anything else we're going to update the source event's
-        # data to include these results and use resuling data as new
-        # events data
+        # if it's anything else we're going to update the source
+        # event's data to include these results and use resuling
+        # data as new events data
         event_data = event.data.copy()
         previous_results = event_data.setdefault('results', [])
         if isinstance(result, (list, tuple)):
@@ -506,8 +528,6 @@ class AppHandler(object):
             previous_results.append(result)
 
         return self.out_event, event_data
-
-
 
 
 class Signal(object):
