@@ -4,7 +4,7 @@ from time import sleep
 from redis_natives import datatypes as rn
 import sys
 
-import bubbles
+from bubbles import build_context
 
 from threading import Thread
 from multiprocessing import Process, Event
@@ -22,6 +22,11 @@ class EventApp(object):
         self.app_name = app_name
         self.config = config
         self.stage_definitions = stage_definitions
+
+        # if they passed us a lookup instead of context
+        # than create one
+        if type(base_context) is dict:
+            base_context = build_context(**base_context)
         self.base_context = base_context
 
         self.stages = []
